@@ -1,0 +1,207 @@
+name: Build polaris (MIX 2S) Droidspaces kernel
+
+# ============================================================================
+#  为小米 MIX 2S (polaris / SDM845) 构建带 Droidspaces 容器支持的内核
+#
+#  产物:
+#    Image.gz                  —— 内核本体
+#    boot-polaris.img          —— 可直接 fastboot flash boot 的镜像(逐字节可复现)
+#    <config> / Module.symvers —— 便于核对
+#
+#  ⚠ 关键约束(踩过的坑,勿改):
+#    1. 基座必须是【设备自己的 /proc/config.gz】。configs/polaris-stock-device.config
+#       就是它。用 sdm845-perf_defconfig 之类会引入 690 项差异并直接起不来。
+#    2. CONFIG_IPC_NS 依赖 (SYSVIPC || POSIX_MQUEUE)。
+#       只能开 POSIX_MQUEUE —— 它加的 mq_bytes 落在 struct user_struct;
+#       而 SYSVIPC 会往 struct task_struct 里插 sysvsem/sysvshm ⇒ kABI 破坏。
+#       本 workflow 会【硬断言】SYSVIPC is not set,不通过就 fail。
+#    3. CONFIG_MODVERSIONS 必须保持 =y(与设备一致)。
+#    4. 打包用 magiskboot v30.7(与真机刷入时同一工具),KERNEL_DTB_SZ 必须保持 11391708。
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream:
+        description: '内核源码仓库'
+        required: true
+        default: 'https://github.com/LineageOS/android_kernel_xiaomi_sdm845.git'
+      upstream_ref:
+        description: '分支 / 标签 / commit'
+        required: true
+        default: 'aa8adfe9bf212c6e93238a86980b4024da4f819a'
+      config:
+        description: '使用的配置(相对仓库根)'
+        required: true
+        default: 'configs/polaris-v3.config'
+      pack:
+        description: '是否打包成可刷的 boot.img'
+        required: true
+        type: choice
+        options: ['yes', 'no']
+        default: 'yes'
+      toolchain:
+        description: '工具链 (ubuntu-clang11 | aosp-clang-r383902b)'
+        required: true
+        type: choice
+        options: ['ubuntu-clang11', 'aosp-clang-r383902b']
+        default: 'ubuntu-clang11'
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write      # 打 tag 时上传 release
+
+env:
+  ARCH: arm64
+  # 仓库 release 里的固定资产(Stock 底板 + x86_64 magiskboot)
+  ASSET_BASE: https://github.com/${{ github.repository }}/releases/download/assets-v1
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------ 依赖
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential flex libssl-dev libelf-dev \
+            zip unzip cpio rsync python3 curl git ca-certificates \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          if [ "${{ inputs.toolchain }}" = "ubuntu-clang11" ] || [ -z "${{ inputs.toolchain }}" ]; then
+            sudo apt-get install -y --no-install-recommends clang-11 llvm-11
+          fi
+
+      # --------------------------------------------------------------- 工具链
+      - name: 工具链 - AOSP clang r383902b1(与真机验证时一致)
+        if: ${{ inputs.toolchain == 'aosp-clang-r383902b' }}
+        run: |
+          set -e
+          mkdir -p "$HOME/clang"
+          # AOSP prebuilts 的 archive 端点
+          URL='https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android11-release/clang-r383902b.tar.gz'
+          if ! curl -fsSL --retry 3 "$URL" | tar -xz -C "$HOME/clang"; then
+            echo "::error::AOSP clang 下载失败,改用 ubuntu-clang11 重跑即可"
+            exit 1
+          fi
+          echo "$HOME/clang/bin" >> $GITHUB_PATH
+          "$HOME/clang/bin/clang" --version | head -2
+
+      - name: 工具链 - 打印版本
+        run: |
+          (clang-11 --version 2>/dev/null || clang --version) | head -2
+          aarch64-linux-gnu-gcc --version | head -1
+          arm-linux-gnueabi-gcc --version | head -1
+
+      # --------------------------------------------------------------- 源码
+      - name: 拉取内核源码
+        id: src
+        run: |
+          set -e
+          git clone --filter=blob:none "${{ inputs.upstream }}" kernel
+          cd kernel
+          git checkout "${{ inputs.upstream_ref }}"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git log -1 --format='  %H%n  %ad%n  %s' --date=iso
+
+      # --------------------------------------------------------- 配置 + 硬断言
+      - name: 应用配置并做硬断言
+        run: |
+          set -e
+          CFG='${{ inputs.config }}'
+          [ -f "$CFG" ] || { echo "::error::找不到配置文件 $CFG"; exit 1; }
+          cp "$CFG" kernel/arch/arm64/configs/polaris_ds_defconfig
+          cd kernel
+          make O=../out ARCH=$ARCH \
+               CC=${CC_BIN:-clang-11} CLANG_TRIPLE=aarch64-linux-gnu- \
+               CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               polaris_ds_defconfig
+          make O=../out ARCH=$ARCH \
+               CC=${CC_BIN:-clang-11} CLANG_TRIPLE=aarch64-linux-gnu- \
+               CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               olddefconfig
+          cd ..
+          echo "----- 必须为 y 的项 -----"
+          for k in NAMESPACES PID_NS UTS_NS IPC_NS POSIX_MQUEUE MODVERSIONS PID_NS; do
+            grep -q "^CONFIG_$k=y" out/.config || { echo "::error::缺少 CONFIG_$k=y"; exit 1; }
+            grep "^CONFIG_$k=y" out/.config
+          done
+          echo "----- 必须【不】开的项(kABI 红线) -----"
+          if grep -q '^CONFIG_SYSVIPC=y' out/.config; then
+            echo "::error::CONFIG_SYSVIPC 被打开!它会往 struct task_struct 插字段 ⇒ kABI 破坏"
+            exit 1
+          fi
+          grep -E '^# CONFIG_SYSVIPC is not set' out/.config
+          echo "----- POSIX_MQUEUE 不得出现在 task_struct 区间(sched.h >1681 行) -----"
+          if awk 'NR>1681 && /CONFIG_POSIX_MQUEUE/ {found=1} END{exit !found}' kernel/include/linux/sched.h; then
+            echo "::error::POSIX_MQUEUE 影响 task_struct,与本仓库假设不符"
+            exit 1
+          fi
+          echo "  ✓ 断言全部通过"
+
+      # --------------------------------------------------------------- 编译
+      - name: 编译 Image.gz
+        run: |
+          set -e
+          cd kernel
+          make O=../out ARCH=$ARCH \
+               CC=${CC_BIN:-clang-11} CLANG_TRIPLE=aarch64-linux-gnu- \
+               CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               -j"$(nproc)" Image.gz
+          ls -la ../out/arch/arm64/boot/Image.gz
+          md5sum ../out/arch/arm64/boot/Image.gz
+
+      - name: 从编好的 Image 里抽内嵌 config 复核
+        run: |
+          set -e
+          ./kernel/scripts/extract-ikconfig out/arch/arm64/boot/Image \
+            | grep -E '^CONFIG_(UTS_NS|PID_NS|IPC_NS|POSIX_MQUEUE|SYSVIPC|MODVERSIONS)='
+
+      # --------------------------------------------------------------- 打包
+      - name: 取打包资产(magiskboot + 原厂底板)
+        if: ${{ inputs.pack != 'no' }}
+        run: |
+          set -e
+          curl -fsSL --retry 3 -o magiskboot "$ASSET_BASE/magiskboot-x86_64"
+          curl -fsSL --retry 3 -o stock-boot.img "$ASSET_BASE/polaris-stock-boot-base.img"
+          chmod +x magiskboot
+          ls -la magiskboot stock-boot.img
+          md5sum magiskboot stock-boot.img
+
+      - name: 打包成可刷 boot.img
+        if: ${{ inputs.pack != 'no' }}
+        run: |
+          set -e
+          bash scripts/pack-boot.sh \
+            out/arch/arm64/boot/Image.gz stock-boot.img boot-polaris.img ./magiskboot
+
+      # --------------------------------------------------------------- 产物
+      - name: 收集产物
+        run: |
+          set -e
+          mkdir -p dist
+          cp out/arch/arm64/boot/Image.gz dist/Image.gz
+          cp out/.config dist/config.used
+          cp out/Module.symvers dist/Module.symvers 2>/dev/null || true
+          [ -f boot-polaris.img ] && cp boot-polaris.img dist/ || true
+          ( cd dist && md5sum * > MD5SUMS.txt && cat MD5SUMS.txt )
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: polaris-droidspaces-${{ steps.src.outputs.commit }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 打 tag 时上传 release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
