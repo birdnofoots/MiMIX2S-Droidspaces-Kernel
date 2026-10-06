@@ -92,6 +92,15 @@ jobs:
           echo "$HOME/clang/bin" >> $GITHUB_PATH
           "$HOME/clang/bin/clang" --version | head -2
 
+      - name: 工具链 - 选定编译器
+        id: tc
+        run: |
+          if [ "${{ inputs.toolchain }}" = "aosp-clang-r383902b" ]; then
+            echo "cc=clang" >> "$GITHUB_OUTPUT"      # 已在 PATH 中(AOSP clang 步骤)
+          else
+            echo "cc=clang-11" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 工具链 - 打印版本
         run: |
           (clang-11 --version 2>/dev/null || clang --version) | head -2
@@ -118,11 +127,11 @@ jobs:
           cp "$CFG" kernel/arch/arm64/configs/polaris_ds_defconfig
           cd kernel
           make O=../out ARCH=$ARCH \
-               CC=${CC_BIN:-clang-11} CLANG_TRIPLE=aarch64-linux-gnu- \
+               CC=${{ steps.tc.outputs.cc }} CLANG_TRIPLE=aarch64-linux-gnu- \
                CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                polaris_ds_defconfig
           make O=../out ARCH=$ARCH \
-               CC=${CC_BIN:-clang-11} CLANG_TRIPLE=aarch64-linux-gnu- \
+               CC=${{ steps.tc.outputs.cc }} CLANG_TRIPLE=aarch64-linux-gnu- \
                CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                olddefconfig
           cd ..
@@ -150,7 +159,7 @@ jobs:
           set -e
           cd kernel
           make O=../out ARCH=$ARCH \
-               CC=${CC_BIN:-clang-11} CLANG_TRIPLE=aarch64-linux-gnu- \
+               CC=${{ steps.tc.outputs.cc }} CLANG_TRIPLE=aarch64-linux-gnu- \
                CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                -j"$(nproc)" Image.gz
           ls -la ../out/arch/arm64/boot/Image.gz
