@@ -1,0 +1,17 @@
+# 构建产物
+out/
+kernel/
+dist/
+*.o
+*.cmd
+*.log
+
+# 大二进制(走 Release 资产,不进仓库正文)
+*.img
+*.apk
+magiskboot
+magiskboot-x86_64
+
+# 编辑器
+.vscode/
+.idea/
