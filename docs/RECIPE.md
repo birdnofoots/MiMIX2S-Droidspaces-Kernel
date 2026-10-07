@@ -331,3 +331,11 @@ su -c 'settings put global adb_allowed_connection_timeout 0'   # 对应"停用 A
 6. **`fastboot flash` 报 `waiting for any device` = 没刷上**，别当成功
 7. 改正在运行的 bash 脚本会把执行搞坏（`syntax error`）⇒ 先 kill 再替换
 8. `screencap` 全黑不可信；判"进系统"要用 `boot_completed=1` + 核对 `/proc/version` + **截图看图**
+9. **`magiskboot` 的输出走 stderr，不是 stdout** ⇒ `magiskboot unpack x.img | tee log` 得到的 `log` 是
+   **0 字节**（终端上却能看到输出，因为终端同时显示 stderr）。所有管道/命令替换都要写成
+   `magiskboot ... 2>&1 | tee log`。
+   踩过的坑：打包脚本只读 `repack.log` 里的 `KERNEL_DTB_SZ`，因日志为空而误报
+   **"DTB 段被破坏,拒绝产出"**，把一次完全正确的编译判成了失败 ✗
+10. `magiskboot` 只在 **unpack** 输出里打 `KERNEL_DTB_SZ`，**repack** 输出里没有 ⇒ 解析时两个日志都要看；
+    更稳的做法是**结构校验**：把产出镜像再解包一次，`cmp kernel_dtb` 必须与原厂逐字节相同
+    （`scripts/pack-boot.sh` 现在两种校验都做）
