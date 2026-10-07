@@ -233,6 +233,7 @@ su -c '/data/local/tmp/droidspaces --name=ubuntu --rootfs=/data/droidspaces/ubun
 .github/workflows/build-kernel.yml   CI:拉源码 → 配置(+硬断言) → 编译 → 打包 → 产物
 configs/polaris-stock-device.config  设备原厂 /proc/config.gz(基座基线)
 configs/polaris-v3.config            真机验证过的配置(基座 + PID_NS/UTS_NS/POSIX_MQUEUE/IPC_NS)
+configs/polaris-v4-veth.config       v4 = v3 + CONFIG_VETH=y(解锁 --net=nat),已真机刷入验证
 scripts/build-kernel.sh              本地/CI 通用编译
 scripts/pack-boot.sh                 打包(带 DTB 断言),已证明可逐字节复现
 scripts/flash-polaris.sh             fastboot boot / flash / verify
@@ -243,6 +244,7 @@ container/02-agents.sh               容器内 Node 22 + AI agent CLI
 container/probe.sh / verify.sh       容器内自检
 docs/RECIPE.md                       完整可复现配方(含所有命令与踩坑)
 docs/NETWORKING.md                   容器网络模式详解(host/nat/none/gateway 的区别与用法)
+docs/TROUBLESHOOTING.md              踩坑与排错手册(systemd/4.9内核不兼容 · magiskboot stderr · 容器名串号 · apt 四层坑 …)
 docs/polaris-status-20261007.md      成功报告全文
 ```
 
