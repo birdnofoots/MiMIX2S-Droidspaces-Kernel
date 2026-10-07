@@ -70,6 +70,60 @@ done
 dpkg --configure -a     # 一次通过
 ```
 
+### 顺手消掉 apt 刷屏的红字（可选但强烈建议）
+
+`SYSTEMD_OFFLINE=1` 只在交互式 shell 生效；从 App/非登录 shell 里跑 apt 时，
+`systemctl` 仍是真身 ⇒ 每次装包都刷一屏红色：
+
+```
+Failed to disable unit: Cannot resolve specifiers in unit /etc/systemd/system/multi-user.target.wants/remote-fs.target
+（× 几十条，看着像灾难，实际 dpkg 完全没失败）
+```
+
+把 `systemctl` 也 shim 掉，并对子命令给出**诚实且不报错**的回答：
+
+```sh
+dpkg-divert --local --rename --add /usr/bin/systemctl
+cat > /usr/bin/systemctl <<'SHIM'
+#!/bin/sh
+cmd="$1"; shift 2>/dev/null
+case "$cmd" in
+  --version|-v)      echo "systemd 261 (droidspaces container shim)"; exit 0 ;;
+  is-system-running) echo "offline";  exit 1 ;;   # 真的没在跑
+  is-enabled)        echo "disabled"; exit 1 ;;
+  is-active)         echo "inactive"; exit 3 ;;
+  is-failed)         echo "inactive"; exit 1 ;;
+  status|show)       echo "Unit not loaded (no systemd in container)."; exit 4 ;;
+  *)                 exit 0 ;;                    # enable/disable/daemon-reload … 静默成功
+esac
+SHIM
+chmod 755 /usr/bin/systemctl
+```
+
+另外 `locale: Cannot set LC_CTYPE to default locale` 是纯装饰性问题（镜像没生成 locale）：
+
+```sh
+sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && locale-gen
+printf 'LANG=en_US.UTF-8\n' > /etc/default/locale
+```
+
+### 修完之后，**哪些输出仍会（也应该）出现**
+
+| 输出 | 判定 |
+|---|---|
+| `invoke-rc.d: policy-rc.d denied execution of start.` | ✅ **正常且必要** —— 这正是 `policy-rc.d` 在阻止容器里自动启服务 |
+| `invoke-rc.d: could not determine current runlevel` | ⚪ 正常，容器没有 runlevel 概念 |
+| `update-rc.d: … It looks like a network service, we disable it.` | ⚪ 正常，sysvinit 的处理 |
+
+**验证手法**：不要只看有没有红字，要看**系统健康**：
+
+```sh
+dpkg --audit                    # 空 ⇒ 无破损包
+apt-get check                   # 无错误 ⇒ 依赖一致
+dpkg -l | awk '$1!~/^ii/ && $1~/^i/'   # 空 ⇒ 无"已解包未配置"
+dpkg -l <刚装的包>               # 状态须为 ii
+```
+
 **为什么用 `dpkg-divert` 而不是改 `/var/lib/dpkg/info/systemd.postinst`**：
 divert 让 dpkg 知道该文件被本地接管 ⇒ **systemd 以后升级也不会覆盖 shim**，而且完全可撤销；
 改 postinst 则会在下次升级时被覆盖回去。
