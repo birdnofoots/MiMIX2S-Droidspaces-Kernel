@@ -242,6 +242,7 @@ container/01-setup.sh                容器内 systemd + 工具链
 container/02-agents.sh               容器内 Node 22 + AI agent CLI
 container/probe.sh / verify.sh       容器内自检
 docs/RECIPE.md                       完整可复现配方(含所有命令与踩坑)
+docs/NETWORKING.md                   容器网络模式详解(host/nat/none/gateway 的区别与用法)
 docs/polaris-status-20261007.md      成功报告全文
 ```
 
