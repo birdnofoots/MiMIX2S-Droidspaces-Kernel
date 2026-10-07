@@ -8,6 +8,14 @@ name: Build polaris (MIX 2S) Droidspaces kernel
 #    boot-polaris.img          —— 可直接 fastboot flash boot 的镜像(逐字节可复现)
 #    <config> / Module.symvers —— 便于核对
 #
+#  ⚠ 适用范围(硬前提):
+#     机型 = 小米 MIX 2S (polaris),仅此一型。
+#     ROM  = LineageOS 22.2 (Android 15)。本 workflow 产出的 boot.img 只能刷在 LOS 上:
+#            · 配置基座 configs/polaris-stock-device.config 取自该机 LOS 的 /proc/config.gz
+#            · 打包底板是 LOS 的 boot.img ⇒ 产物带 LOS 的 ramdisk
+#            ⇒ 刷到 MIUI 原厂或其它第三方 ROM 上会因 ramdisk 不匹配而起不来。
+#            换 ROM 需同时替换「配置基座」与「打包底板」,流程其余不变。
+#
 #  ⚠ 关键约束(踩过的坑,勿改):
 #    1. 基座必须是【设备自己的 /proc/config.gz】。configs/polaris-stock-device.config
 #       就是它。用 sdm845-perf_defconfig 之类会引入 690 项差异并直接起不来。
