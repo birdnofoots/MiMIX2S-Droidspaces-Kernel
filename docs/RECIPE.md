@@ -10,8 +10,32 @@
 | 角色 | 说明 |
 |---|---|
 | 主机 | 任意 Linux x86_64（编译 + 打包 + 刷机）|
-| 手机 | MIX 2S (polaris)，已解锁 BL、已 root（Magisk v30.7）、已开 USB 调试 |
+| 手机 | MIX 2S (polaris)，**必须已刷 LineageOS 22.2 (Android 15)**，已解锁 BL、已 root（Magisk v30.7）、已开 USB 调试 |
 | 数据线 | 能稳定传输的线（刷机时 USB 掉线是最常见的失败原因）|
+
+> ⚠️ **本配方与 LineageOS 绑定，不是通用配方。**
+> 两处强依赖：
+> - **配置基座**：§1 取的是**该机 LOS 的 `/proc/config.gz`**（驱动集合按 LOS 的 vendor 分区对齐）
+> - **打包底板**：§4 用 LOS 的 `boot.img` 做底，产出的镜像**带 LOS 的 ramdisk**，
+>   刷到 MIUI/其它 ROM 上必然起不来
+>
+> 换 ROM 时的做法：把这两处都换成新 ROM 的（新 ROM 的 `/proc/config.gz` + 新 ROM 的
+> `boot.img`），其余流程一字不改。
+>
+> **为什么不能跨 ROM 直接用**：`boot.img` = 内核 + **那个 ROM 的 ramdisk**。
+> 本配方是「保留底板 ramdisk、只换 kernel 段」，所以产物带的是底板的 ramdisk
+> ⇒ 底板属于哪个 ROM，产物就只能刷在哪个 ROM 上。**内核思路通用，boot.img 不通用。**
+>
+> 要加的三项（`PID_NS` / `UTS_NS` / `POSIX_MQUEUE`+`IPC_NS`）与 ROM 无关，永远一样；
+> 需要换的只有「配置基座」和「打包底板」两处。
+
+确认设备当前确实在 LOS 上：
+
+```bash
+adb shell getprop ro.build.version.lineageos 2>/dev/null   # 有输出即 LOS
+adb shell getprop ro.lineage.build.version
+adb shell getprop ro.product.device                        # 必须是 polaris
+```
 
 ```bash
 export ANDROID_ADB_SERVER_PORT=5037
