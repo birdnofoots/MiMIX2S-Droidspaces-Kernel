@@ -165,14 +165,62 @@ droidspaces --name=ubuntu info  →  Networking: host
 droidspaces --name=kali   info  →  Networking: host
 ```
 
-### host 模式下的端口冲突（最实际的问题）
+### host 模式下的端口冲突（**实测**）
 
-两个 host 容器共享网络 ⇒ **端口会抢**：
+两个 host 容器共享网络命名空间 ⇒ **端口空间也是共享的**。实测（polaris，2026-10-07）：
 
-| 服务 | 现状 |
-|---|---|
-| ubuntu 的 sshd | 占 `22` ✅ |
-| kali 的 sshd | 若启动会失败（22 被占）⇒ 改到 2222 |
+```
+宿主   ns/net = net:[4026531907]
+ubuntu ns/net = net:[4026531907]
+kali   ns/net = net:[4026531907]
+```
+
+于是当 ubuntu 的 sshd 已占 22 时，在 kali 里启动 sshd 会**直接失败退出**：
+
+```
+Bind to port 22 on 0.0.0.0 failed: Address already in use.
+Bind to port 22 on :: failed: Address already in use.
+Cannot bind any address.        ← 打印完就退出,服务根本没起来
+```
+
+用 Python 单独绑端口验证，结论一致（排除 sshd 的特异性）：
+
+```
+kali 绑定 22   → ✗ [Errno 98] Address already in use
+kali 绑定 2222 → ✓ 成功
+```
+
+**要点**
+
+- **不是「起来了但连不上」，而是「根本起不来」** ⇒ 不存在「随机连上某一个」这种事
+- 端口空间属于**网络命名空间**，不是容器 ⇒ 同一 ns 内端口全局唯一
+- 唯一可能出现「随机命中」的是进程用了 `SO_REUSEPORT`（内核会把新连接负载均衡给多个 socket）—— **sshd 不用**，所以不会
+- `0.0.0.0:22`（IPv4）与 `[::]:22`（IPv6）是**两个**独立绑定，都会被占
+
+**办法一：让两个 sshd 用不同端口**
+
+```sh
+# kali 里
+sed -i 's/^#*Port .*/Port 2222/' /etc/ssh/sshd_config
+/usr/sbin/sshd -p 2222
+```
+
+实测（同一个 IP，靠端口区分谁是谁）：
+
+```
+$ ssh 192.168.1.189          →  hostname=ubuntu   os=Ubuntu 24.04.5 LTS
+$ ssh -p 2222 192.168.1.189  →  hostname=kali     os=Kali GNU/Linux Rolling
+```
+
+宿主侧 `0.0.0.0:22`(ubuntu) 与 `0.0.0.0:2222`(kali) 并存；**在 ubuntu 容器里 `ss -ltn` 也能看到 2222** —— 再次印证同一个网络栈。
+
+> 附：Kali 的 sshd 首次启动还需两个前置，否则会以别的理由失败：
+> `mkdir -p /run/sshd && chmod 755 /run/sshd`（解包出来的 `umask` 若是 000，目录会是 777，
+> sshd 会拒绝：`/run/sshd must be owned by root and not group or world-writable`）
+> 以及 `ssh-keygen -A` 生成 host key。
+
+**办法二（更优，需 `CONFIG_VETH`）**：改用 `--net=nat`。每个容器有**独立的网络命名空间和独立端口空间**
+⇒ **两个都能用 22**，宿主用 `--port 2222:22` 之类映射进来即可，既不冲突也不需要改容器内的配置。
 
 ---
 
