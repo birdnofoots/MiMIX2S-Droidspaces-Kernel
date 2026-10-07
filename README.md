@@ -7,6 +7,64 @@
 
 ---
 
+## ⚠️ 适用前提（**重要，先读这段**）
+
+| 项 | 要求 |
+|---|---|
+| 机型 | 小米 MIX 2S —— `ro.product.device = polaris`，**仅此一型** |
+| **ROM** | **LineageOS 22.2（Android 15）**。本内核**必须刷在 LineageOS 上** |
+| 内核源码 | **LineageOS** `android_kernel_xiaomi_sdm845`，分支 `lineage-22.2` @ `aa8adfe9bf212c6e93238a86980b4024da4f819a` |
+| 配置基座 | 该机 **LineageOS 自己的 `/proc/config.gz`** |
+| 刷入分区 | `boot`（A-only 单槽）→ 本机为 `/dev/block/sde45` |
+
+### 为什么**必须**是 LineageOS
+
+1. **配置基座取自 LOS**：`configs/polaris-stock-device.config` 就是这台机器跑 LOS 时的
+   `/proc/config.gz`。驱动集合、模块清单都是按 LOS 的 vendor 分区对齐的。
+   换 ROM ⇒ 必须用**新 ROM 自己的** `/proc/config.gz` 重做配置。
+2. **打包底板是 LOS 的 `boot.img`**：`scripts/pack-boot.sh` 是「保留原厂 boot.img 里的
+   ramdisk / DTB / AVB 结构，只把 kernel 段换掉」。产出的镜像里带的是 **LOS 的 ramdisk**
+   ⇒ 刷到 MIUI 原厂或别的第三方 ROM 上，**ramdisk 与系统不匹配，必然起不来** ✗
+3. **源码是 LOS 的 sdm845 内核树**：包含 LineageOS 对 polaris 的设备改动，
+   与小米原厂 `star-r-oss` 树不是同一份。
+
+> **结论**：不要把这个 `boot-polaris.img` 刷到 MIUI 原厂或非 LineageOS 的 ROM 上。
+> 想给别的 ROM 做同样的东西，按 `docs/RECIPE.md` 把「配置基座」和「打包底板」
+> 都换成那个 ROM 的即可，剩下的流程完全一样。
+
+### 那「只要是安卓就行」吗？—— 不是，`boot.img` 是 ROM 绑定的
+
+一句话区分：
+
+> **内核** = 「机型 + 内核基线 + 配置」
+> **`boot.img`** = 「内核 + **那个 ROM 的 ramdisk**」
+
+**ramdisk 决定能不能开机，配置决定驱动对不对。** 本仓库的打包方式是
+「保留底板 boot.img 的 ramdisk，只把 kernel 段换掉」⇒ 产物天生带着 LOS 的
+`init` / `init.rc` / fstab。
+
+| 目标 ROM | 能否直接用本仓库的 `boot-polaris.img` | 原因 |
+|---|---|---|
+| **LineageOS 22.2 (polaris)** | ✅ 可以 | 就是为它做的，ramdisk/配置/源码三者对齐 |
+| **基于 LOS 的第三方 ROM**（crDroid / Evolution X 等 polaris 版）| ⚠️ 大概率可以 | 同源，沿用 LOS 的 ramdisk 结构 |
+| **MIUI 原厂 / 其它 AOSP ROM** | ❌ **不行** | ① ramdisk 是 LOS 的 ⇒ init/挂载全乱 ⇒ bootloop；② 配置基座是 LOS 的 ⇒ 驱动集合可能不对（丢 WiFi/触屏/充电）；③ 若那个 ROM 用可加载 `.ko`，`MODVERSIONS` CRC 对不上 ⇒ 模块被拒 |
+
+**但「内核思路」是通用的** —— 搬到别的 ROM 只需替换 3 处，流程一字不改：
+
+| # | 替换什么 | 在哪儿取 |
+|---|---|---|
+| 1 | **配置基座** `configs/<新ROM>.config` | 在**那个 ROM** 上：`adb shell 'su -c "zcat /proc/config.gz"'` |
+| 2 | **打包底板** `stock-<新ROM>.img` | 在**那个 ROM** 上：`dd if=/dev/block/by-name/boot of=stock.img` |
+| 3 | **内核源码**（可沿用 LOS 的树）| 同机型 + 同内核大版本通常兼容；那个 ROM 有更好的设备树就换它的 |
+
+要加的三项（`PID_NS` / `UTS_NS` / `POSIX_MQUEUE` + `IPC_NS`）与 ROM 无关，永远一样。
+剩余流程照 `docs/RECIPE.md` 走一遍即可。
+
+> 如果只是想正常用手机（不需要容器），**没必要**刷本内核 —— 它加的那些 namespace
+> 对 ROM 无害，但对普通使用没有任何收益。
+
+---
+
 ## 一、最终成果（真机实测）
 
 | 项 | 值 |
